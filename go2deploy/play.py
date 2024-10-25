@@ -1,4 +1,5 @@
 from go2deploy.build import go2py
+from go2deploy.filter import KalmanFilter3D
 
 import time
 import datetime
@@ -45,6 +46,8 @@ class Go2Iface:
         self.cfg = cfg
         self.log_file = log_file
 
+        self.acc_bias = np.array([0.851, 0.310, 9.580])
+
         self._robot = go2py.RobotIface()
         self._robot.start_control()
         self.default_joint_pos = np.array(
@@ -71,6 +74,7 @@ class Go2Iface:
         self.timestamp = time.perf_counter()
         self.step_count = 0
 
+        self.kalman_filter = KalmanFilter3D()
         self.update_state()
         self.update_command()
         _obs = self._compute_obs()
@@ -99,7 +103,8 @@ class Go2Iface:
         return self._compute_obs()
     
     def update_state(self):
-        
+        self.robot_state = self._robot.get_robot_state()
+
         self.prev_rpy = self.rpy
         # self.rpy = self._robot.get_rpy()
         (
@@ -124,7 +129,7 @@ class Go2Iface:
 
         self.lxy = mix(self.lxy, self._robot.lxy(), 0.5)
         self.rxy = mix(self.rxy, self._robot.rxy(), 0.5)
-        self.latency = (datetime.datetime.now() - self._robot.timestamp).total_seconds()
+        # self.latency = (datetime.datetime.now() - self._robot.timestamp).total_seconds()
 
     def update_command(self):
         pass
@@ -280,7 +285,7 @@ def main():
     else:
         log_file = None
 
-    robot = Go2Vel({}, log_file)
+    robot = Go2Impd({}, log_file)
     
     robot._robot.set_kp(25.)
     robot._robot.set_kd(0.5)
@@ -324,6 +329,7 @@ def main():
                 if i % 25 == 0:
                     # print(robot.projected_gravity)
                     print(robot.command)
+                    print(robot.robot_state.acc - robot.acc_bias, robot.robot_state.gyro)
                     # print(robot.jpos_sdk.reshape(4, 3))
                     # print(robot.sdk_to_orbit(robot.jpos_sdk).reshape(3, 4))
 

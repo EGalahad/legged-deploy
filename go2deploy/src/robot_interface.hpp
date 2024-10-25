@@ -35,6 +35,7 @@ namespace unitree::common
             quat = imu.quaternion();
             rpy = imu.rpy();
             gyro = imu.gyroscope();
+            acc = imu.accelerometer();
             UpdateProjectedGravity();
 
             // motor
@@ -44,15 +45,15 @@ namespace unitree::common
                 const unitree_go::msg::dds_::MotorState_ &m = motor.at(i);
                 jpos.at(i) = m.q();
                 jvel.at(i) = m.dq();
-                tau.at(i) = m.tau_est();
+                tau_est.at(i) = m.tau_est();
             }
         }
 
         virtual void SetCommand(unitree_go::msg::dds_::LowCmd_ &cmd) = 0;
 
-        std::array<float, 12> jpos, jvel, tau;
+        std::array<float, 12> jpos, jvel, tau_est;
         std::array<float, 4> quat;
-        std::array<float, 3> rpy, gyro, projected_gravity;
+        std::array<float, 3> rpy, gyro, acc, projected_gravity;
         std::array<float, 12> jpos_des, jvel_des, kp, kd, tau_ff;
 
     private:

@@ -25,6 +25,17 @@ namespace py = pybind11;
 #define TOPIC_LOWSTATE "rt/lowstate"
 #define TOPIC_HIGHSTATE "rt/sportmodestate"
 
+struct RobotState {
+    std::array<float, 12> jpos;
+    std::array<float, 12> jvel;
+    std::array<float, 12> tau_est;
+
+    std::array<float, 4> quat;
+    std::array<float, 3> gyro;
+    std::array<float, 3> rpy;
+    std::array<float, 3> acc;
+};
+
 class RobotIface
 {
 public:
@@ -165,8 +176,8 @@ public:
             state.begin() + 12
         );
         std::copy(
-            robot_interface.tau.begin(),
-            robot_interface.tau.begin() + robot_interface.tau.size(),
+            robot_interface.tau_est.begin(),
+            robot_interface.tau_est.begin() + robot_interface.tau_est.size(),
             state.begin() + 24
         );
         std::copy(
@@ -201,6 +212,7 @@ public:
         robot_interface.kd.fill(value);
     }
 
+    RobotState robot_state;
     std::chrono::time_point<std::chrono::high_resolution_clock> timestamp_state, timestamp_command;
     double interval_state, interval_command;
     bool lerp_command = false;  // whether to interpolate command between two control steps
@@ -220,6 +232,16 @@ private:
         auto now = std::chrono::high_resolution_clock::now();
         interval_state = std::chrono::duration_cast<std::chrono::duration<double>>(now - timestamp_state).count();
         timestamp_state = std::chrono::high_resolution_clock::now();
+        
+        robot_state.jpos = robot_interface.jpos;
+        robot_state.jvel = robot_interface.jvel;
+        robot_state.tau_est = robot_interface.tau_est;
+        
+        auto imu = low_state.imu_state();
+        robot_state.quat = imu.quaternion();
+        robot_state.rpy = imu.rpy();
+        robot_state.gyro = imu.gyroscope();
+        robot_state.acc = imu.accelerometer();
     }
 
     void HighStateMessageHandler(const void *message)
@@ -331,6 +353,16 @@ void InitChannel(const std::string &networkinterface) {
 
 PYBIND11_MODULE(go2py, m)
 {
+    py::class_<RobotState>(m, "RobotState")
+        .def(py::init<>())
+        .def_readonly("jpos", &RobotState::jpos)
+        .def_readonly("jvel", &RobotState::jvel)
+        .def_readonly("tau_est", &RobotState::tau_est)
+        .def_readonly("quat", &RobotState::quat)
+        .def_readonly("rpy", &RobotState::rpy)
+        .def_readonly("gyro", &RobotState::gyro)
+        .def_readonly("acc", &RobotState::acc);
+
     py::class_<RobotIface>(m, "RobotIface")
         .def(py::init<>())
         .def("start_control", &RobotIface::StartControl)
@@ -351,6 +383,10 @@ PYBIND11_MODULE(go2py, m)
         .def("get_feet_pos", &RobotIface::GetFootPos)
         .def("get_yaw_speed", &RobotIface::GetYawSpeed)
         .def("get_full_state", &RobotIface::GetFullState)
+        .def_readonly("robot_state", &RobotIface::robot_state)
+        .def("get_robot_state", [](RobotIface &robotIface) {
+            return robotIface.robot_state;
+        })
         .def_readwrite("lerp_command", &RobotIface::lerp_command)
         .def_readwrite("explicit_pd", &RobotIface::explicit_pd)
         .def_readonly("timestamp_state", &RobotIface::timestamp_state)
