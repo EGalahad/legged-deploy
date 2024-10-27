@@ -1,5 +1,5 @@
 from go2deploy.build import go2py
-from go2deploy.filter import KalmanFilter3D
+# from go2deploy.filter import KalmanFilter3D
 
 import time
 import datetime
@@ -49,7 +49,7 @@ class Go2Iface:
         self.acc_bias = np.array([0.851, 0.310, 9.580])
 
         self._robot = go2py.RobotIface()
-        self._robot.start_control()
+        self._robot.start_control(interval=2000)
         self.default_joint_pos = np.array(
             [
                 0.1, -0.1,  0.1, -0.1,  
@@ -74,7 +74,7 @@ class Go2Iface:
         self.timestamp = time.perf_counter()
         self.step_count = 0
 
-        self.kalman_filter = KalmanFilter3D()
+        # self.kalman_filter = KalmanFilter3D()
         self.update_state()
         self.update_command()
         _obs = self._compute_obs()
@@ -313,14 +313,14 @@ def main():
         with torch.inference_mode(), set_exploration_type(ExplorationType.MODE):
             for i in itertools.count():
                 start = time.perf_counter()
-                policy(td)
-                action = td["action"].cpu().numpy()
+                # policy(td)
+                # action = td["action"].cpu().numpy()
                 # print(action)
                 # print(td["state_value"].item())
                 # print(processed_actions)
                 # print(robot._robot.get_joint_pos_target())
                 # obs = torch.as_tensor(robot._compute_obs())
-
+                action = None
                 obs = torch.as_tensor(robot.step(action))
                 td["next", "command"] = torch.as_tensor(robot.command, dtype=torch.float32).unsqueeze(0)
                 td["next", "policy"] = obs.unsqueeze(0)
@@ -329,7 +329,9 @@ def main():
                 if i % 25 == 0:
                     # print(robot.projected_gravity)
                     print(robot.command)
-                    print(robot.robot_state.acc - robot.acc_bias, robot.robot_state.gyro)
+                    print(robot.robot_state.rpy)
+                    # print(robot.robot_state.acc - robot.acc_bias, robot.robot_state.gyro)
+                    # print(robot.robot_state.time_since_state_update, robot.robot_state.state_update_interval)
                     # print(robot.jpos_sdk.reshape(4, 3))
                     # print(robot.sdk_to_orbit(robot.jpos_sdk).reshape(3, 4))
 

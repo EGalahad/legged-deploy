@@ -27,13 +27,20 @@ namespace py = pybind11;
 
 struct RobotState {
     std::array<float, 12> jpos;
+    std::array<float, 12> jpos_des;
     std::array<float, 12> jvel;
+    std::array<float, 12> jacc;
     std::array<float, 12> tau_est;
 
     std::array<float, 4> quat;
     std::array<float, 3> gyro;
     std::array<float, 3> rpy;
     std::array<float, 3> acc;
+
+    double time_since_state_update, state_update_interval;
+    double time_since_control_update;
+    double time_since_control_application;
+    double control_application_since_state_update;
 };
 
 class RobotIface
@@ -57,7 +64,7 @@ public:
         std::cout << "Init complete!" << std::endl;
     }
 
-    void StartControl() {
+    void StartControl(uint64_t interval = 2000) {
         // waiting for gamepad command to start the control thread
         std::chrono::milliseconds duration(100);
         // listen to gamepad command
@@ -76,7 +83,7 @@ public:
         rsc.ServiceSwitch("sport_mode", 1, status);
         // UserControlCallback();
 
-        main_thread_ptr = CreateRecurrentThreadEx("main", UT_CPU_ID_NONE, 500, &RobotIface::MainThreadStep, this);
+        main_thread_ptr = CreateRecurrentThreadEx("main", UT_CPU_ID_NONE, interval, &RobotIface::MainThreadStep, this);
         
         std::cout << "Start control!" << std::endl;
     }
@@ -212,11 +219,22 @@ public:
         robot_interface.kd.fill(value);
     }
 
+    RobotState GetRobotState() {
+        auto now = std::chrono::high_resolution_clock::now();
+        robot_state.time_since_state_update = std::chrono::duration_cast<std::chrono::duration<double>>(now - timestamp_state).count();
+        robot_state.time_since_control_update = std::chrono::duration_cast<std::chrono::duration<double>>(now - timestamp_command).count();
+        robot_state.time_since_control_application = std::chrono::duration_cast<std::chrono::duration<double>>(now - timestamp_write).count();
+        robot_state.control_application_since_state_update = std::chrono::duration_cast<std::chrono::duration<double>>(timestamp_write - timestamp_command).count();
+        robot_state.jpos_des = robot_interface.jpos_des;
+        return robot_state;
+    }
+
     RobotState robot_state;
-    std::chrono::time_point<std::chrono::high_resolution_clock> timestamp_state, timestamp_command;
+    std::chrono::time_point<std::chrono::high_resolution_clock> timestamp_state, timestamp_command, timestamp_write;
     double interval_state, interval_command;
     bool lerp_command = false;  // whether to interpolate command between two control steps
     bool explicit_pd = false;   // whether to explicitly compute the torques from PD gains
+    float damping_kd = 1.0;  // kd used for Damping mode
 
 private:
     void LowStateMessageHandler(const void *message)
@@ -230,11 +248,12 @@ private:
             gamepad.update(rx.RF_RX);
         }
         auto now = std::chrono::high_resolution_clock::now();
-        interval_state = std::chrono::duration_cast<std::chrono::duration<double>>(now - timestamp_state).count();
+        robot_state.state_update_interval = std::chrono::duration_cast<std::chrono::duration<double>>(now - timestamp_state).count();
         timestamp_state = std::chrono::high_resolution_clock::now();
         
         robot_state.jpos = robot_interface.jpos;
         robot_state.jvel = robot_interface.jvel;
+        // robot_state.jacc = robot_interface.jacc;
         robot_state.tau_est = robot_interface.tau_est;
         
         auto imu = low_state.imu_state();
@@ -295,6 +314,7 @@ private:
 
             robot_interface.SetCommand(cmd);
             lowcmd_publisher->Write(cmd);
+            timestamp_write = std::chrono::high_resolution_clock::now();
 
             if (robot_interface.projected_gravity.at(2) > -0.1) {
                 std::cout << "Falling detected, damping" << std::endl;
@@ -306,7 +326,7 @@ private:
     void Damping() {
         robot_interface.jvel_des.fill(0.);
         robot_interface.kp.fill(0.);
-        robot_interface.kd.fill(2.0);
+        robot_interface.kd.fill(damping_kd);
         robot_interface.tau_ff.fill(0.);
     }
 
@@ -361,11 +381,17 @@ PYBIND11_MODULE(go2py, m)
         .def_readonly("quat", &RobotState::quat)
         .def_readonly("rpy", &RobotState::rpy)
         .def_readonly("gyro", &RobotState::gyro)
-        .def_readonly("acc", &RobotState::acc);
+        .def_readonly("acc", &RobotState::acc)
+        .def_readonly("time_since_state_update", &RobotState::time_since_state_update)
+        .def_readonly("time_since_control_update", &RobotState::time_since_control_update)
+        .def_readonly("time_since_control_application", &RobotState::time_since_control_application)
+        .def_readonly("control_application_since_state_update", &RobotState::control_application_since_state_update)
+        .def_readonly("state_update_interval", &RobotState::state_update_interval)
+        ;
 
     py::class_<RobotIface>(m, "RobotIface")
         .def(py::init<>())
-        .def("start_control", &RobotIface::StartControl)
+        .def("start_control", &RobotIface::StartControl, py::arg("interval") = 2000)
         .def("get_joint_pos", &RobotIface::GetJointPos)
         .def("get_joint_pos_target", &RobotIface::GetJointPosTarget)
         .def("get_joint_vel", &RobotIface::GetJointVel)
@@ -383,12 +409,10 @@ PYBIND11_MODULE(go2py, m)
         .def("get_feet_pos", &RobotIface::GetFootPos)
         .def("get_yaw_speed", &RobotIface::GetYawSpeed)
         .def("get_full_state", &RobotIface::GetFullState)
-        .def_readonly("robot_state", &RobotIface::robot_state)
-        .def("get_robot_state", [](RobotIface &robotIface) {
-            return robotIface.robot_state;
-        })
+        .def("get_robot_state", &RobotIface::GetRobotState)
         .def_readwrite("lerp_command", &RobotIface::lerp_command)
         .def_readwrite("explicit_pd", &RobotIface::explicit_pd)
+        .def_readwrite("damping_kd", &RobotIface::damping_kd)
         .def_readonly("timestamp_state", &RobotIface::timestamp_state)
         .def_readonly("timestamp_command", &RobotIface::timestamp_command)
         .def_readonly("interval_state", &RobotIface::interval_state)
