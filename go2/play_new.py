@@ -1,5 +1,3 @@
-from go2deploy.build import go2py
-# from go2deploy.filter import KalmanFilter3D
 
 import time
 import datetime
@@ -11,10 +9,17 @@ import h5py
 import argparse
 import os
 
-from scipy.spatial.transform import Rotation as R
-from tensordict import TensorDict
-
 from setproctitle import setproctitle
+from scipy.spatial.transform import Rotation as R
+from go2deploy import ONNXModule, init_channel, RobotIface
+from go2deploy.utils import lerp, normalize
+from torch.utils._pytree import tree_map
+
+try:
+    from tensordict import TensorDict
+    from torchrl.envs.utils import set_exploration_type, ExplorationType
+except ModuleNotFoundError:
+    pass
 
 np.set_printoptions(precision=3, suppress=True, floatmode="fixed")
 
@@ -32,10 +37,6 @@ SDK_JOINT_ORDER = [
 ]
 
 
-def normalize(v: np.ndarray):
-    return v / np.linalg.norm(v)
-
-
 class Go2Iface:
 
     smoothing_length: int = 5
@@ -48,7 +49,7 @@ class Go2Iface:
 
         self.acc_bias = np.array([0.851, 0.310, 9.580])
 
-        self._robot = go2py.RobotIface()
+        self._robot = RobotIface()
         self._robot.start_control(interval=2000)
         self.default_joint_pos = np.array(
             [
@@ -121,14 +122,14 @@ class Go2Iface:
         # angvel = ((self.rpy - self.prev_rpy) / dt).clip(-3, 3)
         self.angvel_history = np.roll(self.angvel_history, -1, axis=1)
         self.angvel_history[:, -1] = angvel
-        self.angvel = mix(self.angvel, self.angvel_history.mean(axis=1), self.smoothing_ratio)
+        self.angvel = lerp(self.angvel, self.angvel_history.mean(axis=1), self.smoothing_ratio)
         
         self.projected_gravity_history[:, 1:] = self.projected_gravity_history[:, :-1]
         self.projected_gravity_history[:, 0] = self._robot.get_projected_gravity()
         self.projected_gravity = normalize(self.projected_gravity_history.mean(1))
 
-        self.lxy = mix(self.lxy, self._robot.lxy(), 0.5)
-        self.rxy = mix(self.rxy, self._robot.rxy(), 0.5)
+        self.lxy = lerp(self.lxy, self._robot.lxy(), 0.5)
+        self.rxy = lerp(self.rxy, self._robot.rxy(), 0.5)
         # self.latency = (datetime.datetime.now() - self._robot.timestamp).total_seconds()
 
     
@@ -192,9 +193,6 @@ class Go2Iface:
         return (self.sdk_to_orbit(jpos_sdk) - self.default_joint_pos) / 0.5
 
 
-def mix(a, b, alpha):
-    return a * (1 - alpha) + alpha * b
-
 
 class Go2Vel(Go2Iface):
     
@@ -203,8 +201,8 @@ class Go2Vel(Go2Iface):
     def update_command(self):
         t = time.perf_counter() - self.start_t
         vx = np.sin(t * 0.75)
-        self.command[0] = mix(self.command[0] * 0.95, self.lxy[1] * 2.0, 0.2)
-        self.command[1] = mix(self.command[1], -self.lxy[0], 0.2)
+        self.command[0] = lerp(self.command[0] * 0.95, self.lxy[1] * 2.0, 0.2)
+        self.command[1] = lerp(self.command[1], -self.lxy[0], 0.2)
 
         self.command[2] = -self.rxy[0] * 1.2
         self.command[3] = 0.75 #
@@ -258,11 +256,6 @@ class Go2Impd(Go2Iface):
         return obs
 
 
-from torchrl.envs.utils import set_exploration_type, ExplorationType
-from go2deploy.policy import ONNXModule
-from torch.utils._pytree import tree_map
-
-
 @torch.inference_mode()
 @set_exploration_type(ExplorationType.MODE)
 def main():
@@ -274,7 +267,7 @@ def main():
     timestr = datetime.datetime.now().strftime("%m-%d_%H-%M-%S")
     setproctitle("play_go2")
 
-    go2py.init_channel("enp58s0")
+    init_channel("enp58s0")
 
     init_pos = np.array([
         0.0, 0.9, -1.8, 
