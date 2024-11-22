@@ -41,6 +41,7 @@ struct RobotState {
     double time_since_control_update;
     double time_since_control_application;
     double control_application_since_state_update;
+    int control_mode;
 };
 
 class RobotIface
@@ -226,6 +227,7 @@ public:
         robot_state.time_since_control_application = std::chrono::duration_cast<std::chrono::duration<double>>(now - timestamp_write).count();
         robot_state.control_application_since_state_update = std::chrono::duration_cast<std::chrono::duration<double>>(timestamp_write - timestamp_command).count();
         robot_state.jpos_des = robot_interface.jpos_des;
+        robot_state.control_mode = control_mode;
         return robot_state;
     }
 
@@ -291,26 +293,27 @@ private:
         }
 
         // write low-level command
+        for (int i = 0; i < 12; i++) {
+            auto des = jpos_des[i];
+
+            if (lerp_command) {
+                auto now = std::chrono::high_resolution_clock::now();
+                auto t = std::chrono::duration_cast<std::chrono::duration<double>>(now - timestamp_command).count();
+                t = std::min(t / 0.02, 1.0);
+                des = jpos_des_prev[i] + (jpos_des[i] - jpos_des_prev[i]) * t;
+            }
+
+            if (explicit_pd) {
+                robot_interface.jpos_des[i] = robot_interface.jpos[i];
+                robot_interface.jvel_des[i] = robot_interface.jvel[i];
+                robot_interface.tau_ff[i] = robot_interface.kp[i] * (des - robot_interface.jpos[i]) + robot_interface.kd[i] * (0. - robot_interface.jvel[i]);
+            } else {
+                robot_interface.jpos_des[i] = des;
+            }
+        }
+        
         if (control_mode == 1) {
             std::lock_guard<std::mutex> lock(cmd_mutex);
-            for (int i = 0; i < 12; i++) {
-                auto des = jpos_des[i];
-
-                if (lerp_command) {
-                    auto now = std::chrono::high_resolution_clock::now();
-                    auto t = std::chrono::duration_cast<std::chrono::duration<double>>(now - timestamp_command).count();
-                    t = std::min(t / 0.02, 1.0);
-                    des = jpos_des_prev[i] + (jpos_des[i] - jpos_des_prev[i]) * t;
-                }
-
-                if (explicit_pd) {
-                    robot_interface.jpos_des[i] = robot_interface.jpos[i];
-                    robot_interface.jvel_des[i] = robot_interface.jvel[i];
-                    robot_interface.tau_ff[i] = robot_interface.kp[i] * (des - robot_interface.jpos[i]) + robot_interface.kd[i] * (0. - robot_interface.jvel[i]);
-                } else {
-                    robot_interface.jpos_des[i] = des;
-                }
-            }
 
             robot_interface.SetCommand(cmd);
             lowcmd_publisher->Write(cmd);
@@ -376,6 +379,7 @@ PYBIND11_MODULE(go2py, m)
     py::class_<RobotState>(m, "RobotState")
         .def(py::init<>())
         .def_readonly("jpos", &RobotState::jpos)
+        .def_readonly("jpos_des", &RobotState::jpos_des)
         .def_readonly("jvel", &RobotState::jvel)
         .def_readonly("tau_est", &RobotState::tau_est)
         .def_readonly("quat", &RobotState::quat)
@@ -387,6 +391,7 @@ PYBIND11_MODULE(go2py, m)
         .def_readonly("time_since_control_application", &RobotState::time_since_control_application)
         .def_readonly("control_application_since_state_update", &RobotState::control_application_since_state_update)
         .def_readonly("state_update_interval", &RobotState::state_update_interval)
+        .def_readonly("control_mode", &RobotState::control_mode)
         ;
 
     py::class_<RobotIface>(m, "RobotIface")
