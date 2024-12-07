@@ -24,3 +24,14 @@ class ONNXModule:
         outputs = {k: v for k, v in zip(self.out_keys, outputs)}
         return outputs
     
+
+class ONNXPolicy:
+    def __init__(self, path: str):
+        self.model = ONNXModule(path)
+    
+    def __call__(self, input: Dict[str, np.ndarray]):
+        out = self.model(input)
+        action = out["action"].reshape(-1)
+        carry = {k[1]: v for k, v in out.items() if k[0] == "next"}
+        return action, carry
+

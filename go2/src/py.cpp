@@ -29,6 +29,7 @@ struct RobotState {
     std::array<float, 12> jpos;
     std::array<float, 12> jpos_des;
     std::array<float, 12> jvel;
+    std::array<float, 12> jvel_raw;
     std::array<float, 12> jacc;
     std::array<float, 12> tau_est;
 
@@ -36,6 +37,7 @@ struct RobotState {
     std::array<float, 3> gyro;
     std::array<float, 3> rpy;
     std::array<float, 3> acc;
+    std::array<int16_t, 4> foot_force;
 
     double time_since_state_update, state_update_interval;
     double time_since_control_update;
@@ -44,6 +46,11 @@ struct RobotState {
     int control_mode;
 };
 
+void lerp_(std::array<float, 12>& a, const std::array<float, 12>& b, float t) {
+    for (size_t i = 0; i < a.size(); ++i) {
+        a[i] = a[i] + t * (b[i] - a[i]);
+    }
+}
 
 class SecondOrderLowPassFilter {
     public:
@@ -73,7 +80,7 @@ class SecondOrderLowPassFilter {
         }
     
     private:
-        std::array<float, 3> b = {0.293 0.586 0.293};
+        std::array<float, 3> b = {0.293, 0.586, 0.293};
         std::array<float, 3> a = {1.0, 0.0, 0.172};
         std::array<float, 12> x_tm1;
         std::array<float, 12> x_tm2; 
@@ -293,8 +300,7 @@ private:
         timestamp_state = std::chrono::high_resolution_clock::now();
         
         robot_state.jpos = robot_interface.jpos;
-        robot_state.jvel = robot_interface.jvel;
-        // robot_state.jacc = robot_interface.jacc;
+        robot_state.jvel_raw = robot_interface.jvel;
         robot_state.tau_est = robot_interface.tau_est;
         
         auto imu = low_state.imu_state();
@@ -302,6 +308,7 @@ private:
         robot_state.rpy = imu.rpy();
         robot_state.gyro = imu.gyroscope();
         robot_state.acc = imu.accelerometer();
+        robot_state.foot_force = low_state.foot_force();
     }
 
     void HighStateMessageHandler(const void *message)
@@ -330,6 +337,20 @@ private:
             rsc.ServiceSwitch("sport_mode", 1, status);
             std::cout << "L1 pressed, switch mode to sport mode" << std::endl;
         }
+
+        if (substep % 2 == 0) {
+            // jvel_substeps[(substep / 2) % 4] = robot_interface.jvel;
+            // // average jvel over 4 substeps
+            // for (int i = 0; i < 12; i++) {
+            //     robot_state.jvel[i] = 0;
+            //     for (int j = 0; j < 2; j++) {
+            //         robot_state.jvel[i] += jvel_substeps[j][i];
+            //     }
+            //     robot_state.jvel[i] /= 4;
+            // }
+            lerp_(robot_state.jvel, robot_interface.jvel, 0.5);
+        }
+        substep +=1;
 
         // write low-level command
         for (int i = 0; i < 12; i++) {
@@ -407,6 +428,8 @@ protected:
     int32_t status; // RobotStateClient service status
 
     std::array<float, 12> jpos_des, jpos_des_prev;
+    std::array<std::array<float, 12>, 4> jvel_substeps;
+    uint32_t substep = 0;
 };
 
 void InitChannel(const std::string &networkinterface) {
@@ -420,11 +443,13 @@ PYBIND11_MODULE(go2py, m)
         .def_readonly("jpos", &RobotState::jpos)
         .def_readonly("jpos_des", &RobotState::jpos_des)
         .def_readonly("jvel", &RobotState::jvel)
+        .def_readonly("jvel_raw", &RobotState::jvel_raw)
         .def_readonly("tau_est", &RobotState::tau_est)
         .def_readonly("quat", &RobotState::quat)
         .def_readonly("rpy", &RobotState::rpy)
         .def_readonly("gyro", &RobotState::gyro)
         .def_readonly("acc", &RobotState::acc)
+        .def_readonly("foot_force", &RobotState::foot_force)
         .def_readonly("time_since_state_update", &RobotState::time_since_state_update)
         .def_readonly("time_since_control_update", &RobotState::time_since_control_update)
         .def_readonly("time_since_control_application", &RobotState::time_since_control_application)

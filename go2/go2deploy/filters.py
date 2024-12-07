@@ -11,8 +11,9 @@ class SecondOrderLowPassFilter:
         # Compute the filter coefficients (second-order, low-pass)
         nyquist = 0.5 * fs
         normal_cutoff = cutoff / nyquist
+        print("Normalized cutoff: ", normal_cutoff)
         self.b, self.a = signal.butter(2, normal_cutoff, btype='lowpass', analog=False)
-        
+        print(self.b, self.a)
         # Initialize previous inputs and outputs (n-1, n-2 terms)
         self.x1 = 0.0  # x[n-1]
         self.x2 = 0.0  # x[n-2]
